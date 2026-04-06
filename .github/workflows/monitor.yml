@@ -2,12 +2,20 @@ name: URcheck Monitor
 
 on:
   schedule:
-    # 每 15 分钟运行一次（GitHub Actions 使用 UTC）
     - cron: '*/15 * * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: '测试模式（直接用 last_state.json 的值发通知，不爬网站）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 permissions:
-  contents: write  # 允许在工作流中推回 last_state.json
+  contents: write
 
 jobs:
   monitor:
@@ -21,8 +29,6 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
 
       - name: Install dependencies
         run: |
@@ -33,6 +39,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
         run: |
           python monitor.py
 
