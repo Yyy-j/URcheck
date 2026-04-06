@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
+# 依赖安装：
+#   pip install requests playwright beautifulsoup4
+#   playwright install chromium
 import requests
+from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 import json
 import os
@@ -30,75 +34,88 @@ def save_last_state(state):
 
 def fetch_page(url):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-        r.encoding = r.apparent_encoding
-        return r.text
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(2500)
+            html = page.content()
+            browser.close()
+            return html
     except Exception as e:
         logging.error(f"Failed to fetch {url}: {e}")
         return None
 
-def extract_vacancy_count(text):
-    if re.search(r"空室なし|満室|募集停止", text):
-        return 0
-    m = re.search(r"(\d+)\s*(室|件|戸)", text)
+
+
+def extract_page_total_vacancy(html):
+    """从页面全文提取「該当空室数 x 部屋」中的 x。返回 int>=0 或 -1（未找到）。"""
+    soup = BeautifulSoup(html, "html.parser")
+    page_text = soup.get_text(" ", strip=True)
+    m = re.search(r"該当空室数\s*(\d+)\s*部屋", page_text)
     if m:
-        return int(m.group(1))
-    if re.search(r"空室あり|空室有|募集中", text):
-        return 1
-    return 0
+        total = int(m.group(1))
+        logging.info(f"[TOTAL] 該当空室数 = {total} 部屋")
+        return total
+    logging.debug("[TOTAL] 該当空室数 not found in page text")
+    return -1
 
 def find_vacancy_count(html, name):
     soup = BeautifulSoup(html, "html.parser")
 
-    # 先找包含物件名的文字节点
+    # 第一步：定位包含物件名的文字节点
     nodes = soup.find_all(string=re.compile(re.escape(name)))
     if not nodes:
         logging.warning(f"'{name}' not found on page")
-        return 0
+        return -1
 
     for node in nodes:
         parent = node.parent
-        ancestors = [parent] + list(parent.parents)[:10]
+        ancestors = [parent] + list(parent.parents)[:20]
 
+        # Pass 1：在直接祖先容器内找 strong.rep_bukken-count-room
         for tag in ancestors:
-            # 先直接抓你确认过的数字标签
+            tag_text = tag.get_text(" ", strip=True)
+            if name not in tag_text:
+                continue
+
             count_tag = tag.select_one("strong.rep_bukken-count-room")
             if count_tag:
                 text = count_tag.get_text(strip=True)
-                logging.info(f"[DIRECT] {name} -> rep_bukken-count-room = {text}")
+                logging.info(f"[CLASS] '{name}' -> rep_bukken-count-room = '{text}'")
                 if text.isdigit():
                     return int(text)
 
-            # 再抓空室状況附近的整个块
-            count_block = tag.select_one(".rep_bukken-count, .search-result-count, .vacancy, .status")
-            if count_block:
-                block_text = count_block.get_text(" ", strip=True)
-                count = extract_vacancy_count(block_text)
-                logging.info(f"[BLOCK] {name} -> {block_text}")
-                if count >= 0:
-                    return count
-
-        # 再退一步：从当前 node 往上找最近的大卡片，再在整张卡片里找
+        # Pass 2：从每个祖先容器出发，在其所有子孙中找同时含物件名
+        #         且含 strong.rep_bukken-count-room 的更大 card 容器
+        CARD_SELECTORS = [
+            "li", "article", "section",
+            "[class*='item']", "[class*='card']",
+            "[class*='bukken']", "[class*='result']",
+            "[class*='list']", "[class*='property']",
+        ]
+        checked_ids = set()
         for tag in ancestors:
-            tag_text = tag.get_text(" ", strip=True)
+            for selector in CARD_SELECTORS:
+                for card in tag.select(selector):
+                    card_id = id(card)
+                    if card_id in checked_ids:
+                        continue
+                    checked_ids.add(card_id)
 
-            # 只对包含物件名的较大容器做检查，避免过早被页面别处文本干扰
-            if name in tag_text and len(tag_text) < 3000:
-                count_tag = tag.select_one("strong.rep_bukken-count-room")
-                if count_tag:
-                    text = count_tag.get_text(strip=True)
-                    logging.info(f"[CARD] {name} -> {text}")
-                    if text.isdigit():
-                        return int(text)
+                    card_text = card.get_text(" ", strip=True)
+                    if name not in card_text:
+                        continue
 
-                count = extract_vacancy_count(tag_text)
-                logging.info(f"[TEXT] {name} -> snippet: {tag_text[:200]}")
-                if count > 0:
-                    return count
+                    count_tag = card.select_one("strong.rep_bukken-count-room")
+                    if count_tag:
+                        text = count_tag.get_text(strip=True)
+                        logging.info(f"[CARD] '{name}' -> rep_bukken-count-room = '{text}' (selector={selector})")
+                        if text.isdigit():
+                            return int(text)
 
     logging.warning(f"Vacancy count not found for '{name}'")
-    return 0
+    return -1
 
 def send_telegram(bot_token, chat_id, message):
     if not bot_token or not chat_id:
@@ -140,8 +157,22 @@ def main():
                 current_state[name] = last_state.get(name, 0)
                 continue
 
-            count = find_vacancy_count(html, name)
-            logging.info(f"  → {name}: {count} 件空室")
+            page_total = extract_page_total_vacancy(html)
+
+            if page_total == 0:
+                # 页面明确显示空室数为 0，无需深入查找
+                logging.info(f"  → {name}: 0 件空室（page total = 0）")
+                count = 0
+            else:
+                # page_total > 0 或 -1（未识别）：继续用 find_vacancy_count 精确定位
+                count = find_vacancy_count(html, name)
+                logging.info(f"  → {name}: {count} 件空室")
+
+            if count < 0:
+                logging.warning(f"  Could not determine vacancy for '{name}', keeping last state")
+                current_state[name] = last_state.get(name, 0)
+                continue
+
             current_state[name] = count
 
             last = int(last_state.get(name, 0))
