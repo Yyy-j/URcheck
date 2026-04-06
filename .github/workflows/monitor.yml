@@ -13,6 +13,8 @@ on:
         options:
           - 'false'
           - 'true'
+  repository_dispatch:
+    types: [trigger-monitor]
 
 permissions:
   contents: write
