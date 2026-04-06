@@ -50,29 +50,51 @@ def extract_vacancy_count(text):
 
 def find_vacancy_count(html, name):
     soup = BeautifulSoup(html, "html.parser")
-    nodes = soup.find_all(string=re.compile(re.escape(name)))
 
+    # 先找包含物件名的文字节点
+    nodes = soup.find_all(string=re.compile(re.escape(name)))
     if not nodes:
         logging.warning(f"'{name}' not found on page")
         return 0
 
     for node in nodes:
         parent = node.parent
-        ancestors = [parent] + list(parent.parents)[:8]
+        ancestors = [parent] + list(parent.parents)[:10]
 
         for tag in ancestors:
+            # 先直接抓你确认过的数字标签
             count_tag = tag.select_one("strong.rep_bukken-count-room")
             if count_tag:
                 text = count_tag.get_text(strip=True)
+                logging.info(f"[DIRECT] {name} -> rep_bukken-count-room = {text}")
                 if text.isdigit():
-                    logging.info(f"Found vacancy count for {name}: {text}")
                     return int(text)
 
+            # 再抓空室状況附近的整个块
+            count_block = tag.select_one(".rep_bukken-count, .search-result-count, .vacancy, .status")
+            if count_block:
+                block_text = count_block.get_text(" ", strip=True)
+                count = extract_vacancy_count(block_text)
+                logging.info(f"[BLOCK] {name} -> {block_text}")
+                if count >= 0:
+                    return count
+
+        # 再退一步：从当前 node 往上找最近的大卡片，再在整张卡片里找
+        for tag in ancestors:
             tag_text = tag.get_text(" ", strip=True)
-            if re.search(r"空室|募集|満室", tag_text):
+
+            # 只对包含物件名的较大容器做检查，避免过早被页面别处文本干扰
+            if name in tag_text and len(tag_text) < 3000:
+                count_tag = tag.select_one("strong.rep_bukken-count-room")
+                if count_tag:
+                    text = count_tag.get_text(strip=True)
+                    logging.info(f"[CARD] {name} -> {text}")
+                    if text.isdigit():
+                        return int(text)
+
                 count = extract_vacancy_count(tag_text)
-                if len(tag_text) < 500:
-                    logging.debug(f"Matched in ancestor text (len={len(tag_text)}): {tag_text[:200]}")
+                logging.info(f"[TEXT] {name} -> snippet: {tag_text[:200]}")
+                if count > 0:
                     return count
 
     logging.warning(f"Vacancy count not found for '{name}'")
