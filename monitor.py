@@ -139,8 +139,12 @@ def main():
         save_last_state(current_state)
 
     if notifications:
+        if notifications:
+        # 複数の chat_id に対応（改行区切り）
+        chat_ids = [cid.strip() for cid in chat_id.splitlines() if cid.strip()]
         for msg in notifications:
-            send_telegram(bot_token, chat_id, msg)
+            for cid in chat_ids:
+                send_telegram(bot_token, cid, msg)
     else:
         logging.info("No new vacancies detected")
 
