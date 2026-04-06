@@ -62,7 +62,7 @@ def find_vacancy_count(html, name):
             if re.search(r"空室|募集|満室", tag_text):
                 count = extract_vacancy_count(tag_text)
                 if len(tag_text) < 500:
-                    logging.debug(f"Matched in ancestor text (len={{len(tag_text)}}): {{tag_text[:200]}}")
+                    logging.debug(f"Matched in ancestor text (len={len(tag_text)}): {tag_text[:200]}")
                     return count
 
         for sibling in list(parent.next_siblings)[:8] + list(parent.previous_siblings)[:8]:
@@ -76,7 +76,7 @@ def find_vacancy_count(html, name):
     idx = page_text.find(name)
     if idx != -1:
         snippet = page_text[max(0, idx - 50): idx + 150]
-        logging.debug(f"Fallback snippet for '{name}': {{snippet}}")
+        logging.debug(f"Fallback snippet for '{name}': {snippet}")
         return extract_vacancy_count(snippet)
 
     return 0
@@ -85,7 +85,7 @@ def send_telegram(bot_token, chat_id, message):
     if not bot_token or not chat_id:
         logging.error("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set.")
         return False
-    url = f"https://api.telegram.org/bot{{bot_token}}/sendMessage"
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
     try:
         r = requests.post(url, json=payload, timeout=15)
@@ -93,7 +93,7 @@ def send_telegram(bot_token, chat_id, message):
         logging.info("Telegram notification sent")
         return True
     except Exception as e:
-        logging.error(f"Failed to send Telegram message: {{e}}")
+        logging.error(f"Failed to send Telegram message: {e}")
         return False
 
 def main():
@@ -108,31 +108,31 @@ def main():
         logging.info("=== TEST MODE: using last_state.json values directly ===")
         for name, url in TARGETS.items():
             now = int(last_state.get(name, 0))
-            logging.info(f"  {{name}}: {{now}} 件（from last_state.json）")
+            logging.info(f"  {name}: {now} 件（from last_state.json）")
             if now > 0:
-                msg = f"🧪 <b>[テスト通知]</b>\n{{name}}\n空室数: <b>{{now}} 件</b>\n{{url}}"
+                msg = f"🧪 <b>[テスト通知]</b>\n{name}\n空室数: <b>{now} 件</b>\n{url}"
                 notifications.append(msg)
     else:
         current_state = {}
         for name, url in TARGETS.items():
-            logging.info(f"Checking: {{name}}")
+            logging.info(f"Checking: {name}")
             html = fetch_page(url)
             if html is None:
                 current_state[name] = last_state.get(name, 0)
                 continue
 
             count = find_vacancy_count(html, name)
-            logging.info(f"  → {{name}}: {{count}} 件空室")
+            logging.info(f"  → {name}: {count} 件空室")
             current_state[name] = count
 
             last = int(last_state.get(name, 0))
             now = int(count)
 
             if last == 0 and now > 0:
-                msg = f"🏠 <b>[UR空室通知]</b>\n{{name}}\n空室数: <b>{{now}} 件</b>\n{{url}}"
+                msg = f"🏠 <b>[UR空室通知]</b>\n{name}\n空室数: <b>{now} 件</b>\n{url}"
                 notifications.append(msg)
             elif last > 0 and now == 0:
-                logging.info(f"  {{name}} 已満室（之前: {{last}} 件）")
+                logging.info(f"  {name} 已満室（之前: {last} 件）")
 
         save_last_state(current_state)
 
