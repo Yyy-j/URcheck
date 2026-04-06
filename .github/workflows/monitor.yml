@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -43,6 +43,7 @@ jobs:
           git add last_state.json || true
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "Update last_state.json [ci skip]" || echo "no commit"
+            git pull --rebase origin main
             git push
           else
             echo "No changes to commit"
