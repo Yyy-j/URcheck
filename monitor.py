@@ -51,14 +51,23 @@ def extract_vacancy_count(text):
 def find_vacancy_count(html, name):
     soup = BeautifulSoup(html, "html.parser")
     nodes = soup.find_all(string=re.compile(re.escape(name)))
+
     if not nodes:
         logging.warning(f"'{name}' not found on page")
         return 0
 
     for node in nodes:
         parent = node.parent
-        ancestors = [parent] + list(parent.parents)[:5]
+        ancestors = [parent] + list(parent.parents)[:8]
+
         for tag in ancestors:
+            count_tag = tag.select_one("strong.rep_bukken-count-room")
+            if count_tag:
+                text = count_tag.get_text(strip=True)
+                if text.isdigit():
+                    logging.info(f"Found vacancy count for {name}: {text}")
+                    return int(text)
+
             tag_text = tag.get_text(" ", strip=True)
             if re.search(r"空室|募集|満室", tag_text):
                 count = extract_vacancy_count(tag_text)
@@ -66,20 +75,7 @@ def find_vacancy_count(html, name):
                     logging.debug(f"Matched in ancestor text (len={len(tag_text)}): {tag_text[:200]}")
                     return count
 
-        for sibling in list(parent.next_siblings)[:8] + list(parent.previous_siblings)[:8]:
-            stext = sibling.get_text(" ", strip=True) if hasattr(sibling, "get_text") else str(sibling).strip()
-            if re.search(r"空室|募集|満室", stext):
-                count = extract_vacancy_count(stext)
-                if count > 0:
-                    return count
-
-    page_text = soup.get_text(" ", strip=True)
-    idx = page_text.find(name)
-    if idx != -1:
-        snippet = page_text[max(0, idx - 50): idx + 150]
-        logging.debug(f"Fallback snippet for '{name}': {snippet}")
-        return extract_vacancy_count(snippet)
-
+    logging.warning(f"Vacancy count not found for '{name}'")
     return 0
 
 def send_telegram(bot_token, chat_id, message):
