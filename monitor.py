@@ -38,28 +38,17 @@ def fetch_page(url):
         return None
 
 def extract_vacancy_count(text):
-    """
-    从文本中提取空房数量。
-    - 必须带单位（室/件/戸），避免误匹配面积、楼层、门牌号等无关数字
-    - 识别"空室なし"/"満室"等满室状态，返回 0
-    - 识别"空室あり"无具体数字时，返回 1
-    """
-    # 明确满室/无空室
     if re.search(r"空室なし|満室|募集停止", text):
         return 0
-    # 带单位的数字（必须有单位）
     m = re.search(r"(\d+)\s*(室|件|戸)", text)
     if m:
         return int(m.group(1))
-    # 有空室但无具体数字
     if re.search(r"空室あり|空室有|募集中", text):
         return 1
     return 0
 
 def find_vacancy_count(html, name):
     soup = BeautifulSoup(html, "html.parser")
-
-    # 找到包含该楼盘名称的文本节点
     nodes = soup.find_all(string=re.compile(re.escape(name)))
     if not nodes:
         logging.warning(f"'{name}' not found on page")
@@ -67,21 +56,15 @@ def find_vacancy_count(html, name):
 
     for node in nodes:
         parent = node.parent
-
-        # 向上最多找 5 级祖先，在各层级的文本中查找空室信息
         ancestors = [parent] + list(parent.parents)[:5]
         for tag in ancestors:
             tag_text = tag.get_text(" ", strip=True)
-            # 只在包含"空室"等关键词的片段中才提取，避免整页误匹配
             if re.search(r"空室|募集|満室", tag_text):
                 count = extract_vacancy_count(tag_text)
-                # 额外防护：如果祖先层级太高，文字太长，可能包含多个楼盘数据
-                # 仅在文本长度合理时才采信
                 if len(tag_text) < 500:
                     logging.debug(f"Matched in ancestor text (len={len(tag_text)}): {tag_text[:200]}")
                     return count
 
-        # 检查兄弟节点
         for sibling in list(parent.next_siblings)[:8] + list(parent.previous_siblings)[:8]:
             stext = sibling.get_text(" ", strip=True) if hasattr(sibling, "get_text") else str(sibling).strip()
             if re.search(r"空室|募集|満室", stext):
@@ -89,7 +72,6 @@ def find_vacancy_count(html, name):
                 if count > 0:
                     return count
 
-    # 兜底：截取楼盘名附近文字片段（±150字符），只在此范围内匹配
     page_text = soup.get_text(" ", strip=True)
     idx = page_text.find(name)
     if idx != -1:
@@ -116,42 +98,51 @@ def send_telegram(bot_token, chat_id, message):
 
 def main():
     last_state = load_last_state()
-    current_state = {}
-
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    test_mode = os.environ.get("TEST_MODE", "false").lower() == "true"
 
     notifications = []
 
-    for name, url in TARGETS.items():
-        logging.info(f"Checking: {name}")
-        html = fetch_page(url)
-        if html is None:
-            current_state[name] = last_state.get(name, 0)
-            continue
+    if test_mode:
+        # 测试模式：直接用 last_state.json 的值，假设"之前全是 0"，跳过爬网站
+        logging.info("=== TEST MODE: using last_state.json values directly ===")
+        for name, url in TARGETS.items():
+            now = int(last_state.get(name, 0))
+            logging.info(f"  {name}: {now} 件（from last_state.json）")
+            if now > 0:
+                msg = f"🧪 <b>[テスト通知]</b>\n{name}\n空室数: <b>{now} 件</b>\n{url}"
+                notifications.append(msg)
+    else:
+        # 正常模式：爬取网站并与上次状态对比
+        current_state = {}
+        for name, url in TARGETS.items():
+            logging.info(f"Checking: {name}")
+            html = fetch_page(url)
+            if html is None:
+                current_state[name] = last_state.get(name, 0)
+                continue
 
-        count = find_vacancy_count(html, name)
-        logging.info(f"  → {name}: {count} 件空室")
-        current_state[name] = count
+            count = find_vacancy_count(html, name)
+            logging.info(f"  → {name}: {count} 件空室")
+            current_state[name] = count
 
-        last = int(last_state.get(name, 0))
-        now = int(count)
+            last = int(last_state.get(name, 0))
+            now = int(count)
 
-        # 从无到有：发送通知
-        if last == 0 and now > 0:
-            msg = f"🏠 <b>[UR空室通知]</b>\n{name}\n空室数: <b>{now} 件</b>\n{url}"
-            notifications.append(msg)
-        # 从有到无：也可选择通知（满室）
-        elif last > 0 and now == 0:
-            logging.info(f"  {name} 已满室（之前: {last} 件）")
+            if last == 0 and now > 0:
+                msg = f"🏠 <b>[UR空室通知]</b>\n{name}\n空室数: <b>{now} 件</b>\n{url}"
+                notifications.append(msg)
+            elif last > 0 and now == 0:
+                logging.info(f"  {name} 已満室（之前: {last} 件）")
+
+        save_last_state(current_state)
 
     if notifications:
         for msg in notifications:
             send_telegram(bot_token, chat_id, msg)
     else:
         logging.info("No new vacancies detected")
-
-    save_last_state(current_state)
 
 if __name__ == "__main__":
     main()
