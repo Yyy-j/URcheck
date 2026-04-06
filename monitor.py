@@ -19,7 +19,8 @@ TARGETS = {
     "かわさきテクノピア堀川町ハイツ": "https://www.ur-net.go.jp/chintai/sp/kanto/kanagawa/area/132.html",
     "アーベインビオ川崎": "https://www.ur-net.go.jp/chintai/sp/kanto/kanagawa/area/132.html",
     "サンスクエア川崎": "https://www.ur-net.go.jp/chintai/sp/kanto/kanagawa/area/131.html",
-    "西菅田": "https://www.ur-net.go.jp/chintai/kanto/kanagawa/area/102.html",
+    "グリーンヒル寺田": "https://www.ur-net.go.jp/chintai/kanto/tokyo/area/201.html",
+    "八王子パークヒル 宇津木台": "https://www.ur-net.go.jp/chintai/kanto/tokyo/area/201.html",
 }
 
 LAST_STATE_FILE = "last_state.json"
