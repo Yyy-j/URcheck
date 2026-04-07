@@ -1,8 +1,6 @@
 name: URcheck Monitor
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       test_mode:
