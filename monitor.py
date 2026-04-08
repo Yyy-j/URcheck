@@ -44,30 +44,46 @@ def save_last_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-def fetch_page(url, retries=3):
-    """用 Playwright 抓渲染后的 HTML。"""
+# ── 方案1+3：复用单个 Playwright 实例，并发打开多个 tab，相同 URL 只加载一次 ──
+def fetch_pages_all(url_map, retries=3):
+    """
+    一次性启动 Playwright，对所有不重复的 URL 并发打开 tab 抓取。
+    返回 {name: html_or_None} 的字典。
+    """
+    # 方案3：去重，相同 URL 只 fetch 一次
+    unique_urls = list(dict.fromkeys(url_map.values()))
+
     for attempt in range(1, retries + 1):
         browser = None
         try:
             with sync_playwright() as p:
+                # 方案1：只启动一次 Chromium
                 browser = p.chromium.launch(headless=True)
-                page = browser.new_page(
-                    user_agent=HEADERS["User-Agent"],
-                    viewport={"width": 1440, "height": 1200},
-                )
 
-                # 不用 networkidle，避免 UR 页面慢脚本导致超时
-                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                # 对每个不重复的 URL 开一个 tab，并发 goto
+                url_to_page = {}
+                for url in unique_urls:
+                    pg = browser.new_page(
+                        user_agent=HEADERS["User-Agent"],
+                        viewport={"width": 1440, "height": 1200},
+                    )
+                    pg.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    url_to_page[url] = pg
 
-                # 给页面一点时间，把动态数字填进 DOM
-                page.wait_for_timeout(5000)
+                # 所有 tab 已并发加载完毕，统一等待动态内容填入 DOM
+                url_to_html = {}
+                for url, pg in url_to_page.items():
+                    pg.wait_for_timeout(5000)
+                    url_to_html[url] = pg.content()
+                    pg.close()
 
-                html = page.content()
                 browser.close()
-                return html
+
+                # 方案3：把去重后的 html 重新映射回每个 name
+                return {name: url_to_html[target_url] for name, target_url in url_map.items()}
 
         except Exception as e:
-            logging.error(f"Attempt {attempt}/{retries} failed to fetch {url}: {e}")
+            logging.error(f"Attempt {attempt}/{retries} failed to fetch pages: {e}")
             try:
                 if browser:
                     browser.close()
@@ -77,7 +93,8 @@ def fetch_page(url, retries=3):
             if attempt < retries:
                 time.sleep(5)
             else:
-                return None
+                # 全部重试失败，返回所有 name 对应 None
+                return {name: None for name in url_map}
 
 
 def extract_vacancy_count(text):
@@ -241,9 +258,13 @@ def main():
     else:
         current_state = {}
 
+        # ── 方案1+3：一次性并发抓取所有页面（相同 URL 只请求一次）──
+        logging.info("Fetching all pages concurrently...")
+        html_map = fetch_pages_all(TARGETS)
+
         for name, url in TARGETS.items():
             logging.info(f"Checking: {name}")
-            html = fetch_page(url)
+            html = html_map.get(name)
 
             if html is None:
                 logging.warning(f"  Failed to fetch page, keeping last state for '{name}'")
